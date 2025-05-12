@@ -1,0 +1,610 @@
+---
+title: "Agbo Database - Admin Data Models"
+author: "AJ Tennathur"
+date: "2025-04-24"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Libraries
+
+``` {r}
+library(knitr)
+library(tidyverse)
+library(moderndive)
+library(caret)
+library(mgcv)
+library(rpart)
+library(rpart.plot)
+library(knitr)
+library(GGally)
+library(ipred)
+library(vip)
+library(randomForest)
+library(xgboost)
+library(DBI)
+library(dplyr)
+library(tidytext)
+library(stringr)
+library(readr)
+library(textstem)     
+library(tm)           
+library(FactoMineR)   
+library(factoextra)   
+library(cluster)   
+library(text2vec)
+```
+
+
+
+``` {r}
+store = read_csv("store.csv")
+
+# Text Feature Extraction - Store Data Pre-Processing
+
+# The store data is information regarding the items that have been purchased 
+# delivered to the organization. The transaction (insertion into the table) occurs whenever there is imputation of new items which will update the corresponding quantity in the item table in which can there will be update to increase the quantity of the item. 
+
+#Unsupervised Machine Learning Text Feature Extraction/Pre-Processing 
+#using R's TidyText Library, priming data for machine learning models 
+#that will be included in another file. 
+
+store_keywords=store %>%
+  unnest_tokens(word, description) %>%
+  anti_join(stop_words, by = "word") %>%  
+  count(grp_id, word, sort = TRUE) %>%
+  bind_tf_idf(word, grp_id, n) %>%
+  group_by(grp_id) %>%
+  slice_max(tf_idf, n = 1, with_ties = FALSE) %>% 
+  ungroup()
+
+store_keywords=store_keywords %>%
+  mutate(group_id_2 = dense_rank(grp_id)) %>%
+  select(grp_id, description_group = word, group_id_2)
+
+store_copy=store %>%
+  left_join(store_keywords, by = "grp_id")
+
+
+# Cleaning Up Column Names 
+
+store_copy = store_copy %>%
+  mutate(description_group = case_when(
+    description_group == "a4" ~ "A4 Papers",
+    description_group == "npn" ~ "Motor Vehicle NPN",
+    description_group == "computers" ~ "Computers",
+    description_group == "Plate" ~ "License Plates",
+    description_group == "Postage" ~ "Postages",
+    TRUE ~ str_to_title(description_group)
+  ))
+```
+
+
+
+``` {r}
+# Basic Visualization 1
+
+store_copy %>%
+  ggplot(aes(x = description_group, fill = description_group)) + 
+  geom_bar() +
+  labs(
+    title = "2015 Store Data - Quantity By Category",
+    x = "Item Category",
+    y = "Quantity in Store", 
+    fill = "Item Category"
+  ) +
+  theme_classic() + 
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+``` {r}
+store_copy %>%
+    filter(description_group == "A4 Papers") %>%
+    distinct(description)
+
+store_copy %>%
+    filter(description_group == "Computers") %>%
+    distinct(description)
+
+store_copy %>%
+    filter(description_group == "Motor Vehicle Npn") %>%
+    distinct(description)
+
+store_copy %>%
+    filter(description_group == "License Plates") %>%
+    distinct(description)
+
+store_copy %>%
+    filter(description_group == "Postages") %>%
+    distinct(description)
+
+```
+
+
+Looking through our preprocessing method of determining item categories
+through text feature extraction, it is clear that there are many 
+item descriptions that are not matching their respective overall item category.
+This is likely because we are creating categories based on the group id, 
+which is not always the most descriptive in differentiating between 
+different items. But if we were to simply split based on the item name, 
+the data would not be interpret able as there would be too many 
+unique items. 
+
+I will tackle these issues using more advanced machine learning 
+in the models to come. For now, let's use the same preprocessing 
+methods on a table of requests and items joined, which I will explain more 
+of to come, including some of the data engineering that I did. 
+
+
+
+``` {r}
+req_items = read_csv("requests_items.csv")
+
+# Text Feature Extraction - Data Preprocessing 
+
+data("stop_words")
+
+req_items_keywords = req_items %>%
+  unnest_tokens(word, item_name) %>%
+  anti_join(stop_words, by = "word") %>%  
+  count(sub_grp_id, word, sort = TRUE) %>%
+  bind_tf_idf(word, sub_grp_id, n) %>%
+  group_by(sub_grp_id) %>%
+  slice_max(tf_idf, n = 1, with_ties = FALSE) %>% 
+  ungroup() %>%
+  mutate(group_id_2 = dense_rank(sub_grp_id)) %>%
+  select(sub_grp_id, description_group = word, group_id_2)
+
+req_items_copy = req_items %>%
+  left_join(req_items_keywords, by = "sub_grp_id")
+
+```
+
+
+``` {r}
+# Basic Visualization #2
+req_items_copy %>%
+  ggplot(aes(x = description_group, fill = description_group)) + 
+  geom_bar() +
+  labs(
+    title = "2015 Request Data - Quantity Request By Group",
+    x = "Item Group",
+    y = "Quantity Requested", 
+    fill = "Item Group"
+  ) +
+  theme_classic() + 
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+
+``` {r}
+req_items_copy %>%
+    filter(description_group == "almanac") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "batt") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "chairs") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "computer") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "motor") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "papers") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "printer") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "receipts") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "sets") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "stabilizer") %>%
+    distinct(item_name)
+
+req_items_copy %>%
+    filter(description_group == "NA") %>%
+    distinct(item_name)
+
+```
+
+As we have seen, this method is not reliable
+as we are assuming that the group_id is reliable and accurately represents 
+respective item categories. 
+
+For our item requests, let's conduct some more preprocessing methods that 
+will give us better data to use when we move towards our 
+machine learning models. 
+
+
+-- More Advanced Machine Learning 
+
+As previously noted, the idea of grouping based on the sub_grp_id 
+is not reliable as it is not completely accurate at describing the items. 
+Thus, we will do more advanced machine learning techniques that will 
+give us better categorization of the items. 
+
+Let's start with preprocessing unsupervised learning methods,
+including TD-IDF vectorization for text feature extraction, 
+PCA methods/visualization, and K-Means Clustering. 
+
+``` {r}
+req_items_clean = req_items %>%
+  mutate(item_name_clean = item_name %>%
+           str_to_lower() %>%
+           str_replace_all("[[:punct:]]", " ") %>%
+           str_replace_all("\\bups\\b", "uninterruptible power supply") %>%
+           str_replace_all("\\bbatt\\b", "battery") %>%
+           str_replace_all("\\bhdmi\\b", "high definition multimedia interface") %>%
+           str_squish()
+  )
+
+
+it = itoken(req_items_clean$item_name_clean, progressbar = FALSE)
+vocab = create_vocabulary(it) %>%
+  prune_vocabulary(term_count_min = 1)
+vectorizer = vocab_vectorizer(vocab)
+dtm = create_dtm(it, vectorizer)
+tfidf = TfIdf$new()
+dtm_tfidf=fit_transform(dtm, tfidf)
+
+pca_result=prcomp(dtm_tfidf, scale. = TRUE)
+pca_df=as_tibble(pca_result$x[, 1:2])
+colnames(pca_df) = c("PC1", "PC2")
+
+req_items_clean = bind_cols(req_items_clean, pca_df)
+
+set.seed(123)
+kmeans_result = kmeans(pca_df, centers = 5, nstart = 25)
+req_items_clean$cluster <- kmeans_result$cluster
+
+req_items_clean %>%
+  arrange(cluster) %>%
+  select(item_name, item_name_clean, cluster)
+```
+
+
+
+``` {r}
+clustered_items = req_items_clean %>%
+  select(item_name, cluster)
+
+top_terms_by_cluster = clustered_items %>%
+  unnest_tokens(word, item_name) %>%
+  anti_join(stop_words, by = "word") %>%
+  count(cluster, word, sort = TRUE) %>%
+  group_by(cluster) %>%
+  slice_max(n, n = 5) %>%
+  summarise(top_terms = paste(word, collapse = ", "))
+
+print(top_terms_by_cluster)
+
+cluster_labels = c(
+  "1" = "Motors, Vehicles, NPN, Private, Commercial",
+  "2" = "Plates, Official, Vehicles",
+  "3" = "A4 Papers, Receipts, Revenues",
+  "4" = "Cards, GMPC, Multi Purpose",
+  "5" = "Dealership, Plates, Motors"
+)
+
+req_items_clean = req_items_clean %>%
+  mutate(Item_Category = cluster_labels[as.character(cluster)])
+
+req_items_clean %>%
+  filter(cluster == 5)
+
+```
+
+``` {r}
+req_items_clean %>%
+  ggplot(aes(x = cluster, fill = Item_Category)) + 
+  geom_bar() +
+  labs(
+    title = "2015 Request Data - Quantity Request By Group",
+    x = "Item Group",
+    y = "Quantity Requested", 
+    fill = "Item Group"
+  ) +
+  theme_classic() 
+
+```
+
+
+
+
+
+``` {r}
+ggplot(req_items_clean, aes(x = PC1, y = PC2, color = factor(cluster))) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(
+    title = "K-Means Clustering of Item Names with PCA Projection",
+    x = "Principal Component 1",
+    y = "Principal Component 2",
+    color = "Cluster"
+  ) +
+  scale_x_continuous(limits = c(-75, 75)) +
+  scale_y_continuous(limits = c(-75, 75))
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold")
+  )
+
+
+pca_loadings = pca_result$rotation  
+
+
+# head(sort(abs(pca_loadings[,1]), decreasing = TRUE), 10)  # PC1
+# head(sort(abs(pca_loadings[,2]), decreasing = TRUE), 10)  # PC2
+
+```
+
+``` {r}
+# PC2 Top words with highest negative correlation
+head(sort(pca_loadings[,2]), 10)
+head(sort(pca_loadings[,2], decreasing=FALSE), 10)
+
+# PC1 Top words with highest negative correlation
+head(sort(pca_loadings[,1]), 10) 
+head(sort(pca_loadings[,1], decreasing=FALSE), 10)
+
+# PC2 Top words with highest positive correlation
+head(sort(pca_loadings[,2]), 10)
+head(sort(pca_loadings[,2], decreasing=TRUE), 10)
+
+# PC1 Top words with highest positive correlation
+head(sort(pca_loadings[,1]), 10) 
+head(sort(pca_loadings[,1], decreasing=TRUE), 10)
+
+```
+
+
+
+
+Supervised Machine Learning Models 
+
+- Now that we have a dataset that has been through several preprocessing unsupervised 
+machine learning models, we can now conduct supervised machine learning models to try 
+to predict various categories in our models. 
+- In the following code, I will build/analyze models to predict the following: 
+
+Models to predict the following: 
+  - predict item --> not feasible, will overfit and has too many unique levels
+  - predict item category --> more feasible, there are 5 levels or categories
+  - predict season --> every item has an assigned season based on 
+                       the date that it was requested 
+  - predict month --> similar to season
+
+
+- Predicting Item Category 
+  - In predicting item category, we want to create models that will be able 
+  to predict the item category without knowing the item itself. 
+  For example, if we know the season, requested quantity, 
+  or the store quantity of the item requested, can we accurately 
+  predict what category the item is in? 
+  - Let's create the following models and see what we can do. 
+  
+  
+
+# Bagging/Random Forest/Boosting/Multiple Logistic Regression Models
+
+``` {r}
+req_items_clean$Item_Category = as.factor(req_items_clean$Item_Category)
+req_items_clean$season = as.factor(req_items_clean$season)
+
+caretSamp = createDataPartition(req_items_clean$Item_Category,
+                                     p = 0.7, 
+                                     list = FALSE)
+
+train= req_items_clean[caretSamp,]
+test = req_items_clean[-caretSamp,]
+
+train = train %>%
+  select("season", "requested_qty", "store_qty", "Item_Category")
+
+test = test %>%
+  select("season", "requested_qty", "store_qty", "Item_Category")
+
+train = train %>%
+  drop_na()
+
+test = test %>%
+  drop_na()
+
+
+# Bagging 
+set.seed(252)
+caretBag = train(Item_Category ~., 
+               data = train, 
+               method = "treebag",
+               trControl = trainControl("cv", number = 10),
+               importance = TRUE
+)
+
+predCaretBag = caretBag %>% predict(test)
+
+table(predCaretBag, test$Item_Category)
+
+mean(predCaretBag == test$Item_Category)
+
+# Correct Rate
+# 0.9223881
+
+vip(caretBag)
+
+# Random Forest
+set.seed(250)
+
+caretRF = train(Item_Category ~., 
+                data = train, 
+                method = "rf", 
+                trControl = trainControl("cv", number = 10),
+                importance = TRUE
+          )
+
+caretRF$bestTune
+caretRF$finalModel
+
+predCaretRF = caretRF %>% predict(test)
+table(predCaretRF, test$Item_Category)
+
+mean(predCaretRF==test$Item_Category)
+
+# 0.9223881
+
+varImpPlot(caretRF$finalModel, type = 1)
+varImpPlot(caretRF$finalModel, type = 2)
+
+# Boosting
+caretBoost = train(Item_Category ~., 
+                  data = train, 
+                  method = "xgbTree", 
+                  trControl = trainControl("cv", number = 10),
+                  importance = TRUE
+          )
+
+predCaretBoost = caretBoost %>% predict(test)
+table(predCaretBoost, test$Item_Category)
+
+mean(predCaretBoost == test$Item_Category)
+
+# 0.940
+
+# Multiple Logistic Regression
+
+```
+
+
+
+
+
+
+- Predicting Season 
+
+  - In predicting season, we want to see if there is a "connection" between 
+  variables such as item, item_category, and other variables that can give us 
+  an accurate prediction of the season that the item will be requested in. 
+  For example, if we know that the item name is Learners Permit and we know 
+  the item category, can we predict what season of the year this item is requested in? 
+  This is helpful to know, as we can predict which items will be requested during 
+  which months of the year. 
+  
+  - In my analysis, I will be looking individually at clusters 1, 2, and 3, 
+  and seeing which variables for each item cluster would be best at predicting 
+  the season that it will be requested in. 
+  
+
+
+# Bagging/Random Forest/Boosting/Multiple Logistic Regression Models
+
+``` {r}
+
+# Cluster 1 -- Motors, Vehicles, NPN, Private, Commercial
+
+train= req_items_clean[caretSamp,]
+test = req_items_clean[-caretSamp,]
+
+train = train %>%
+ filter(cluster == 1)
+
+test = test %>%
+ filter(cluster == 1)
+
+test = test %>%
+  select("season", "requested_qty", "PC1", "Item_Category", "item_name")
+
+train = train %>%
+  select("season", "requested_qty", "PC1", "Item_Category", "item_name")
+
+train$item_name = as.factor(train$item_name)
+test$item_name = as.factor(test$item_name)
+
+test = test %>%
+  filter(item_name %in% levels(train$item_name))
+test$item_name = factor(test$item_name, levels = levels(train$item_name))
+
+train = train %>%
+  drop_na()
+
+test = test %>%
+  drop_na()
+```
+
+``` {r}
+# Bagging
+
+set.seed(251)
+caretBag = train(season ~., 
+               data = train, 
+               method = "treebag",
+               trControl = trainControl("cv", number = 10),
+               importance = TRUE
+)
+
+predCaretBag = caretBag %>% predict(test)
+
+table(predCaretBag, test$season)
+
+mean(predCaretBag == test$season)
+
+vip(caretBag)
+
+
+# Random Forests Model 
+
+set.seed(111)
+
+caretRF = train(season ~., 
+                data = train, 
+                method = "rf", 
+                trControl = trainControl("cv", number = 10),
+                importance = TRUE
+          )
+
+#caretRF$bestTune
+#caretRF$finalModel
+
+predCaretRF = caretRF %>% predict(test)
+table(predCaretRF, test$season)
+
+mean(predCaretRF==test$season)
+
+varImpPlot(caretRF$finalModel, type = 1)
+varImpPlot(caretRF$finalModel, type = 2)
+```
+
+
+
+
+
+
+
